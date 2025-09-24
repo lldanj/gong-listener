@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gong Listener</title>
+    <meta name="theme-color" content="#111827">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #111827; font-family: system-ui; }
+    </style>
+</head>
+<body>
+    <div class="min-h-screen bg-gray-900 text-white p-4">
+        <div class="max-w-md mx-auto space-y-6">
+            
+            <!-- Header -->
+            <div class="text-center">
+                <h1 class="text-2xl font-bold mb-2">Gong Listener</h1>
+                <p class="text-gray-400 text-sm">Mobile Meditation Monitor</p>
+            </div>
+
+            <!-- Status Bar -->
+            <div class="flex items-center justify-between bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center gap-2">
+                    <div id="status-dot" class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span id="status-text" class="text-sm text-red-500">Disconnected</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-green-500">🔋 85%</span>
+                    <button id="settings-btn" class="p-2 rounded bg-gray-700">⚙️</button>
+                </div>
+            </div>
+
+            <!-- Settings Panel -->
+            <div id="settings-panel" class="bg-gray-800 rounded-lg p-4 hidden">
+                <h3 class="font-semibold mb-3">Settings</h3>
+                <div class="mb-4">
+                    <label class="block text-sm mb-2">Device ID: <span id="device-id-display" class="font-mono text-xs text-gray-400">Loading...</span></label>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm mb-2">Sensitivity: <span id="sensitivity-value">75</span>%</label>
+                    <input id="sensitivity-slider" type="range" min="10" max="100" value="75" class="w-full">
+                </div>
+            </div>
+
+            <!-- Time Display -->
+            <div class="text-center bg-gray-800 rounded-lg p-6">
+                <div id="current-time" class="text-4xl font-mono mb-2">--:--:--</div>
+                <div id="current-date" class="text-gray-400">Loading...</div>
+            </div>
+
+            <!-- Listening Status -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold">Listening Status</h3>
+                    <span id="listening-status" class="text-sm text-gray-400">🔇 Inactive</span>
+                </div>
+
+                <!-- Audio Level -->
+                <div id="audio-meter" class="mb-4 hidden">
+                    <div class="flex justify-between text-sm mb-1">
+                        <span>Audio Level</span>
+                        <span id="audio-level">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-700 rounded-full h-3">
+                        <div id="audio-bar" class="h-3 rounded-full bg-blue-500" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Control Button -->
+                <button id="listen-btn" class="w-full py-3 px-4 rounded-lg font-medium bg-green-600 hover:bg-green-700">
+                    Start Listening
+                </button>
+            </div>
+
+            <!-- Recent Detections -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h3 class="font-semibold mb-3">Recent Detections</h3>
+                <div id="detections-list">
+                    <p class="text-gray-400 text-center py-4">No detections yet today</p>
+                </div>
+            </div>
+
+            <!-- Schedule -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h3 class="font-semibold mb-3">Daily Schedule</h3>
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">09:00</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">11:00</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">14:15</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">15:30</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">17:00</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">19:00</div>
+                    <div class="text-center py-2 bg-gray-700 rounded text-sm">21:00</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // App state
+        let isListening = false;
+        let audioLevel = 0;
+        let connectionStatus = 'disconnected';
+        let detections = [];
+        let sensitivity = 75;
+
+        // WebSocket connection
+        let ws = null;
+        const deviceId = 'listener-' + Math.random().toString(36).substr(2, 9);
+
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsPanel = document.getElementById('settings-panel');
+        const currentTime = document.getElementById('current-time');
+        const currentDate = document.getElementById('current-date');
+        const listeningStatus = document.getElementById('listening-status');
+        const audioMeter = document.getElementById('audio-meter');
+        const audioLevelText = document.getElementById('audio-level');
+        const audioBar = document.getElementById('audio-bar');
+        const listenBtn = document.getElementById('listen-btn');
+        const detectionsDiv = document.getElementById('detections-list');
+        const sensitivitySlider = document.getElementById('sensitivity-slider');
+        const sensitivityValue = document.getElementById('sensitivity-value');
+        const deviceIdDisplay = document.getElementById('device-id-display');
+
+        // Show device ID
+        deviceIdDisplay.textContent = deviceId;
+
+        // WebSocket connection
+        function connectWebSocket() {
+            try {
+                updateConnectionStatus('connecting');
+                console.log('Connecting to WebSocket...');
+                
+                ws = new WebSocket('wss://gong-websocket-server.onrender.com/ws');
+                
+                ws.onopen = function() {
+                    console.log('WebSocket connected!');
+                    updateConnectionStatus('connected');
+                    
+                    // Register as mobile device
+                    ws.send(JSON.stringify({
+                        type: 'device_register',
+                        data: {
+                            deviceId: deviceId,
+                            deviceType: 'mobile_listener',
+                            zone: 'basement-men',
+                            battery: 85,
+                            isListening: isListening,
+                            audioLevel: audioLevel
+                        }
+                    }));
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('Received message:', message.type);
+                        
+                        switch (message.type) {
+                            case 'welcome':
+                                console.log('Server welcome:', message.data.message);
+                                break;
+                            case 'settings_update':
+                                if (message.data.sensitivity) {
+                                    sensitivity = message.data.sensitivity;
+                                    sensitivitySlider.value = sensitivity;
+                                    sensitivityValue.textContent = sensitivity;
+                                    console.log('Sensitivity updated to:', sensitivity);
+                                }
+                                break;
+                            case 'device_command':
+                                if (message.data.command === 'start_listening') {
+                                    if (!isListening) toggleListening();
+                                } else if (message.data.command === 'stop_listening') {
+                                    if (isListening) toggleListening();
+                                }
+                                break;
+                        }
+                    } catch (error) {
+                        console.error('Error parsing message:', error);
+                    }
+                };
+                
+                ws.onclose = function() {
+                    console.log('WebSocket disconnected');
+                    updateConnectionStatus('disconnected');
+                    // Try to reconnect after 3 seconds
+                    setTimeout(connectWebSocket, 3000);
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    updateConnectionStatus('disconnected');
+                };
+                
+            } catch (error) {
+                console.error('Failed to connect:', error);
+                updateConnectionStatus('disconnected');
+                setTimeout(connectWebSocket, 3000);
+            }
+        }
+
+        // Send device status to server
+        function sendDeviceStatus() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'device_status',
+                    data: {
+                        deviceId: deviceId,
+                        zone: 'basement-men',
+                        battery: 85,
+                        isListening: isListening,
+                        audioLevel: audioLevel,
+                        timestamp: new Date().toISOString()
+                    }
+                }));
+            }
+        }
+
+        // Send detection to server
+        function sendDetection(detection) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'gong_detection',
+                    data: {
+                        deviceId: deviceId,
+                        zone: 'basement-men',
+                        detection: detection,
+                        timestamp: new Date().toISOString()
+                    }
+                }));
+            }
+        }
+
+        // Update time every second
+        function updateTime() {
+            const now = new Date();
+            currentTime.textContent = now.toLocaleTimeString('en-US', { 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            currentDate.textContent = now.toLocaleDateString('en-US', { 
+                weekday: 'long', 
+                month: 'short', 
+                day: 'numeric' 
+            });
+        }
+
+        // Update connection status
+        function updateConnectionStatus(status) {
+            connectionStatus = status;
+            const colors = {
+                connected: { dot: 'bg-green-500', text: 'text-green-500' },
+                connecting: { dot: 'bg-yellow-500', text: 'text-yellow-500' },
+                disconnected: { dot: 'bg-red-500', text: 'text-red-500' }
+            };
+            
+            statusDot.className = `w-3 h-3 rounded-full ${colors[status].dot}`;
+            statusText.className = `text-sm ${colors[status].text}`;
+            statusText.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        }
+
+        // Simulate audio levels and real microphone
+        function simulateAudio() {
+            if (isListening) {
+                audioLevel = Math.floor(Math.random() * 30);
+                audioLevelText.textContent = audioLevel + '%';
+                audioBar.style.width = audioLevel + '%';
+                
+                // Simulate detection occasionally
+                if (Math.random() < 0.02) {
+                    addDetection();
+                }
+            }
+        }
+
+        // Add detection
+        function addDetection() {
+            const detection = {
+                time: new Date(),
+                level: Math.floor(Math.random() * 40) + 60,
+                type: 'simulated'
+            };
+            
+            detections.unshift(detection);
+            detections = detections.slice(0, 5);
+            updateDetectionsList();
+            
+            // Send to server
+            sendDetection(detection);
+        }
+
+        // Update detections list
+        function updateDetectionsList() {
+            if (detections.length === 0) {
+                detectionsDiv.innerHTML = '<p class="text-gray-400 text-center py-4">No detections yet today</p>';
+                return;
+            }
+            
+            detectionsDiv.innerHTML = detections.map(detection => `
+                <div class="flex justify-between items-center py-2 border-b border-gray-700">
+                    <span class="text-green-400">✓ Gong Detected</span>
+                    <span class="text-xs text-gray-400">${detection.time.toLocaleTimeString()}</span>
+                </div>
+            `).join('');
+        }
+
+        // Toggle listening
+        async function toggleListening() {
+            if (!isListening) {
+                try {
+                    await navigator.mediaDevices.getUserMedia({ audio: true });
+                    console.log('Microphone access granted');
+                } catch (error) {
+                    console.log('Microphone access denied, using simulation');
+                }
+                
+                isListening = true;
+                listenBtn.textContent = 'Stop Listening';
+                listenBtn.className = 'w-full py-3 px-4 rounded-lg font-medium bg-red-600 hover:bg-red-700';
+                listeningStatus.innerHTML = '🎤 Active';
+                listeningStatus.className = 'text-sm text-green-500';
+                audioMeter.classList.remove('hidden');
+            } else {
+                isListening = false;
+                listenBtn.textContent = 'Start Listening';
+                listenBtn.className = 'w-full py-3 px-4 rounded-lg font-medium bg-green-600 hover:bg-green-700';
+                listeningStatus.innerHTML = '🔇 Inactive';
+                listeningStatus.className = 'text-sm text-gray-400';
+                audioMeter.classList.add('hidden');
+                audioLevel = 0;
+                audioLevelText.textContent = '0%';
+                audioBar.style.width = '0%';
+            }
+            
+            // Send status update to server
+            sendDeviceStatus();
+        }
+
+        // Event listeners
+        settingsBtn.addEventListener('click', () => {
+            settingsPanel.classList.toggle('hidden');
+        });
+
+        listenBtn.addEventListener('click', toggleListening);
+
+        sensitivitySlider.addEventListener('input', (e) => {
+            sensitivity = parseInt(e.target.value);
+            sensitivityValue.textContent = sensitivity;
+        });
+
+        // Initialize app
+        updateTime();
+        setInterval(updateTime, 1000);
+        setInterval(simulateAudio, 100);
+        setInterval(sendDeviceStatus, 10000); // Send status every 10 seconds
+
+        // Start WebSocket connection
+        connectWebSocket();
+    </script>
+</body>
+</html>
